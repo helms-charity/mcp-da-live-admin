@@ -185,7 +185,13 @@ export function generateAutoDescription(blockName, structure, variants) {
 
 async function fetchSourceDocument(org, repo, sourcePath) {
   const url = formatURL('source', org, repo, sourcePath, 'html');
-  return daAdminRequest(url);
+  let result = await daAdminRequest(url);
+  
+  if (typeof result === 'string' && result.startsWith('"') && result.endsWith('"')) {
+    result = JSON.parse(result);
+  }
+  
+  return result;
 }
 
 function parseBlockInstances(html, blockName) {
@@ -238,17 +244,27 @@ function parseBlockInstances(html, blockName) {
   return blockInstances;
 }
 
-export async function extractBlockContent(org, repo, sourcePath, blockName) {
-  if (!sourcePath) {
-    return null;
+export async function extractBlockContent(org, repo, sourcePaths, blockName) {
+  if (!sourcePaths) {
+    return { content: null, sourceUsed: null };
   }
   
-  try {
-    const html = await fetchSourceDocument(org, repo, sourcePath);
-    return parseBlockInstances(html, blockName);
-  } catch (error) {
-    return null;
+  const paths = Array.isArray(sourcePaths) ? sourcePaths : [sourcePaths];
+  
+  for (const sourcePath of paths) {
+    try {
+      const html = await fetchSourceDocument(org, repo, sourcePath);
+      const content = parseBlockInstances(html, blockName);
+      
+      if (content && Object.keys(content).length > 0) {
+        return { content, sourceUsed: sourcePath };
+      }
+    } catch {
+      continue;
+    }
   }
+  
+  return { content: null, sourceUsed: null };
 }
 
 export function generateBlockTemplate(blockName, description = null, variants = [], structure = {}, blockContent = null) {
