@@ -1,18 +1,22 @@
 // src/operations/blocks.js
 
 import { z } from 'zod';
-import { createGitHubClient } from '../common/gh-utils.js';
+import { resolveBlockSource } from '../common/block-utils.js';
 import { daAdminRequest, formatURL, uploadHTML } from '../common/utils.js';
 import { buildLibraryPath, buildContentUrl } from '../common/library-cfg-utils.js';
-import { validateBlockName, validateGitHubAccess } from '../common/validation-utils.js';
+import { validateBlockName } from '../common/validation-utils.js';
 import { LIBRARY_TYPES } from '../common/global.js';
 
 const AnalyzeBlockSchema = z.object({
-  org: z.string().describe('The organization name'),
-  repo: z.string().describe('The repository name'),
   blockName: z.string().describe('The block name to analyze'),
-  branch: z.string().optional().default('main').describe('The branch name (default: main)'),
-  blocksPath: z.string().optional().default('blocks').describe('Path to blocks folder (default: blocks, e.g., aemedge/blocks)')
+  github: z.object({
+    org: z.string(),
+    repo: z.string(),
+    branch: z.string().optional().default('main'),
+    blocksPath: z.string().optional().default('blocks')
+  }).optional().describe('ONLY provide if explicitly fetching from a different GitHub repo. Omit to auto-detect local blocks.'),
+  useLocal: z.boolean().optional().describe('Explicitly use local file system. Omit to auto-detect.'),
+  localBlocksPath: z.string().optional().describe('Custom path to local blocks directory. Omit to use ./blocks')
 });
 
 const GenerateTemplateSchema = z.object({
@@ -43,6 +47,29 @@ const CheckDocExistsSchema = z.object({
   baseFolder: z.string().optional().default('library').describe('Base folder for library (default: library)')
 });
 
+const ListBlocksSchema = z.object({
+  github: z.object({
+    org: z.string(),
+    repo: z.string(),
+    branch: z.string().optional().default('main'),
+    blocksPath: z.string().optional().default('blocks')
+  }).optional().describe('ONLY provide if explicitly fetching from a different GitHub repo. Omit to auto-detect local blocks.'),
+  useLocal: z.boolean().optional().describe('Explicitly use local file system. Omit to auto-detect.'),
+  localBlocksPath: z.string().optional().describe('Custom path to local blocks directory. Omit to use ./blocks')
+});
+
+const GetBlockFilesSchema = z.object({
+  blockName: z.string().describe('The block name (folder name)'),
+  github: z.object({
+    org: z.string(),
+    repo: z.string(),
+    branch: z.string().optional().default('main'),
+    blocksPath: z.string().optional().default('blocks')
+  }).optional().describe('ONLY provide if explicitly fetching from a different GitHub repo. Omit to auto-detect local blocks.'),
+  useLocal: z.boolean().optional().describe('Explicitly use local file system. Omit to auto-detect.'),
+  localBlocksPath: z.string().optional().describe('Custom path to local blocks directory. Omit to use ./blocks')
+});
+
 const STRUCTURE_PATTERNS = {
   hasImage: ['image', 'img', 'picture', 'photo'],
   hasHeading: ['title', 'heading', 'headline'],
@@ -50,12 +77,8 @@ const STRUCTURE_PATTERNS = {
   hasMultipleItems: ['item', 'card', 'column']
 };
 
-function decodeBase64Content(base64Content) {
-  return Buffer.from(base64Content, 'base64').toString('utf-8');
-}
-
-function buildBlockFilePath(blocksPath, blockName, fileName) {
-  return `${blocksPath}/${blockName}/${fileName}`;
+function buildBlockFilePath(blockName, fileName) {
+  return `${blockName}/${fileName}`;
 }
 
 function detectStructureFeatures(classes) {
@@ -72,14 +95,7 @@ function detectStructureFeatures(classes) {
   return features;
 }
 
-async function analyzeBlock(org, repo, blockName, branch = 'main', blocksPath = 'blocks') {
-  const octokit = createGitHubClient();
-
-  const validation = await validateGitHubAccess(octokit, org, repo, branch);
-  if (!validation.accessible) {
-    throw new Error(validation.error);
-  }
-
+export async function analyzeBlock(source, blockName) {
   const result = {
     blockName,
     description: null,
@@ -96,17 +112,9 @@ async function analyzeBlock(org, repo, blockName, branch = 'main', blocksPath = 
     }
   };
 
-  try {
-    const jsPath = buildBlockFilePath(blocksPath, blockName, `${blockName}.js`);
-    const jsResponse = await octokit.repos.getContent({
-      owner: org,
-      repo,
-      path: jsPath,
-      ref: branch
-    });
-
+  const jsContent = await source.getFileContent(buildBlockFilePath(blockName, `${blockName}.js`));
+  if (jsContent) {
     result.hasJS = true;
-    const jsContent = decodeBase64Content(jsResponse.data.content);
 
     const jsdocMatch = jsContent.match(/\/\*\*\s*\n\s*\*\s*(.+?)\s*\n/);
     if (jsdocMatch) {
@@ -117,21 +125,11 @@ async function analyzeBlock(org, repo, blockName, branch = 'main', blocksPath = 
     if (exportMatch) {
       result.structure.functionName = exportMatch[1];
     }
-  } catch {
-    // No JS file
   }
 
-  try {
-    const cssPath = buildBlockFilePath(blocksPath, blockName, `${blockName}.css`);
-    const cssResponse = await octokit.repos.getContent({
-      owner: org,
-      repo,
-      path: cssPath,
-      ref: branch
-    });
-
+  const cssContent = await source.getFileContent(buildBlockFilePath(blockName, `${blockName}.css`));
+  if (cssContent) {
     result.hasCSS = true;
-    const cssContent = decodeBase64Content(cssResponse.data.content);
 
     const allClasses = new Set();
     const classMatches = cssContent.matchAll(/\.([a-zA-Z0-9_-]+)/g);
@@ -151,8 +149,6 @@ async function analyzeBlock(org, repo, blockName, branch = 'main', blocksPath = 
     result.variants = Array.from(variants);
 
     Object.assign(result.structure, detectStructureFeatures(result.structure.classes));
-  } catch {
-    // No CSS file
   }
 
   return result;
@@ -351,17 +347,94 @@ async function checkBlockDocExists(org, repo, blockName, baseFolder = 'library')
   }
 }
 
+async function checkBlockFiles(source, blockName) {
+  const [jsContent, cssContent] = await Promise.all([
+    source.getFileContent(buildBlockFilePath(blockName, `${blockName}.js`)),
+    source.getFileContent(buildBlockFilePath(blockName, `${blockName}.css`))
+  ]);
+
+  return {
+    name: blockName,
+    hasJS: !!jsContent,
+    hasCSS: !!cssContent,
+    type: 'dir'
+  };
+}
+
+async function listBlocks(source) {
+  const directories = await source.listDirectories();
+  const blockPromises = directories.map(dir => checkBlockFiles(source, dir.name));
+  return Promise.all(blockPromises);
+}
+
+async function tryGetReadme(source, blockName) {
+  const readmeVariants = ['README.md', 'readme.md', 'README.MD'];
+  
+  for (const readme of readmeVariants) {
+    const content = await source.getFileContent(buildBlockFilePath(blockName, readme));
+    if (content) {
+      return content;
+    }
+  }
+  
+  return null;
+}
+
+async function getBlockFiles(source, blockName) {
+  const [jsContent, cssContent, readmeContent] = await Promise.all([
+    source.getFileContent(buildBlockFilePath(blockName, `${blockName}.js`)),
+    source.getFileContent(buildBlockFilePath(blockName, `${blockName}.css`)),
+    tryGetReadme(source, blockName)
+  ]);
+
+  return {
+    blockName,
+    hasJS: !!jsContent,
+    hasCSS: !!cssContent,
+    hasReadme: !!readmeContent,
+    jsContent,
+    cssContent,
+    readmeContent
+  };
+}
+
 export const tools = [
   {
+    name: 'da_blocks_list',
+    description: 'List all blocks from source. AUTO-DETECTS local blocks if ./blocks exists. Returns block names and whether they have .js/.css files.',
+    schema: ListBlocksSchema,
+    handler: async (args) => {
+      const { source, metadata } = await resolveBlockSource(args);
+      const blocks = await listBlocks(source);
+      return {
+        source: metadata,
+        totalBlocks: blocks.length,
+        blocks
+      };
+    }
+  },
+  {
+    name: 'da_blocks_get_files',
+    description: 'Get block source files (.js, .css, README) from source. AUTO-DETECTS local blocks if ./blocks exists.',
+    schema: GetBlockFilesSchema,
+    handler: async (args) => {
+      const { source, metadata } = await resolveBlockSource(args);
+      const files = await getBlockFiles(source, args.blockName);
+      return {
+        source: metadata,
+        ...files
+      };
+    }
+  },
+  {
     name: 'da_blocks_analyze',
-    description: 'Analyze a block\'s code to extract metadata (description, variants, structure). Supports custom block paths.',
+    description: 'Analyze a block\'s code to extract metadata (description, variants, structure). AUTO-DETECTS local blocks if ./blocks exists.',
     schema: AnalyzeBlockSchema,
     handler: async (args) => {
-      const analysis = await analyzeBlock(args.org, args.repo, args.blockName, args.branch, args.blocksPath);
+      const { source, metadata } = await resolveBlockSource(args);
+      const analysis = await analyzeBlock(source, args.blockName);
       return {
-        org: args.org,
-        repo: args.repo,
-        blocksPath: args.blocksPath || 'blocks',
+        source: metadata,
         ...analysis
       };
     }

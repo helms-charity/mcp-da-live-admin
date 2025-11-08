@@ -1,9 +1,10 @@
 // src/operations/icons.js
 
 import { z } from 'zod';
-import { buildLibraryPath, createLibraryJSON } from '../common/library-cfg-utils.js';
+import { buildLibraryPath, buildContentUrl, createLibraryJSON } from '../common/library-cfg-utils.js';
 import { listSheetItems, addSheetItem, removeSheetItem, setupSheetItems } from '../common/sheet-utils.js';
 import { LIBRARY_TYPES } from '../common/global.js';
+import { registerLibraryType } from './config.js';
 
 const ListIconsSchema = z.object({
   org: z.string().describe('The organization name'),
@@ -72,7 +73,7 @@ export const tools = [
   },
   {
     name: 'da_library_add_icon',
-    description: 'Add or update an icon in icons.json',
+    description: 'Add or update an icon in icons.json. Automatically checks and registers Icons in site config library sheet if needed.',
     schema: AddIconSchema,
     handler: async (args) => {
       const result = await addSheetItem(
@@ -83,6 +84,12 @@ export const tools = [
         getIconsPath(args.baseFolder),
         createIconsJSON
       );
+      
+      // Always check and register if needed, not just on first create
+      const configUrl = `${buildContentUrl(args.org, args.repo, getIconsPath(args.baseFolder))}.json`;
+      const regResult = await registerLibraryType(args.org, args.repo, 'Icons', configUrl);
+      result.registered = regResult.registered;
+      result.alreadyRegistered = regResult.existed;
       
       return buildResponse(args, result);
     }
@@ -106,7 +113,7 @@ export const tools = [
   },
   {
     name: 'da_library_setup_icons',
-    description: 'Batch setup icons. Creates or updates multiple icons in icons.json.',
+    description: 'Batch setup icons. Creates or updates multiple icons in icons.json. Automatically registers in library.',
     schema: SetupIconsSchema,
     handler: async (args) => {
       const result = await setupSheetItems(
@@ -118,6 +125,14 @@ export const tools = [
         createIconsJSON,
         createIconEntry
       );
+      
+      const configUrl = `${buildContentUrl(args.org, args.repo, getIconsPath(args.baseFolder))}.json`;
+      const regResult = await registerLibraryType(args.org, args.repo, 'Icons', configUrl);
+      result.registered = regResult.registered;
+      result.librarySheet = {
+        existed: !regResult.createdSheet,
+        entryCount: regResult.libraryEntryCount
+      };
       
       return buildResponse(args, result);
     }

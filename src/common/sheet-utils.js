@@ -33,6 +33,7 @@ export async function addSheetItem(org, repo, entry, keyField, path, createSheet
   const sheetJSON = await getSheetJSON(org, repo, path);
   const dataSheet = sheetJSON ? getDataSheet(sheetJSON) : null;
 
+  const created = !sheetJSON; // Track if we're creating the file for the first time
   const existed = dataSheet ? entryExists(dataSheet, entry[keyField], keyField) : false;
   const updatedDataSheet = addEntry(dataSheet, entry, keyField);
 
@@ -41,6 +42,7 @@ export async function addSheetItem(org, repo, entry, keyField, path, createSheet
 
   return {
     added: true,
+    created,
     existed,
     path,
     entry

@@ -182,6 +182,25 @@ export async function validateDAAccess(org, repo) {
   }
 }
 
+export async function validateDADestination(org, repo, baseFolder) {
+  const orgRepoValidation = validateOrgRepo(org, repo);
+  if (!orgRepoValidation.valid) {
+    return orgRepoValidation;
+  }
+
+  const baseFolderValidation = validateBaseFolder(baseFolder);
+  if (!baseFolderValidation.valid) {
+    return baseFolderValidation;
+  }
+
+  const daAccess = await validateDAAccess(org, repo);
+  if (!daAccess.accessible) {
+    return validationResult(false, daAccess.error);
+  }
+
+  return validationResult(true);
+}
+
 export async function validatePrerequisites(octokit, org, repo, baseFolder, blockName = null, branch = 'main') {
   const errors = [];
 
