@@ -1,14 +1,15 @@
 // src/operations/placeholders.js
 
 import { z } from 'zod';
-import { buildLibraryPath, createLibraryJSON } from '../common/library-cfg-utils.js';
+import { buildContentUrl, createLibraryJSON } from '../common/library-cfg-utils.js';
 import { listSheetItems, addSheetItem, removeSheetItem, setupSheetItems } from '../common/sheet-utils.js';
 import { LIBRARY_TYPES } from '../common/global.js';
+import { registerLibraryType } from './config.js';
 
 const ListPlaceholdersSchema = z.object({
   org: z.string().describe('The organization name'),
   repo: z.string().describe('The repository name'),
-  configPath: z.string().optional().default('placeholders').describe('Path to placeholders.json (default: placeholders)')
+  configPath: z.string().optional().default('').describe('Optional folder path (default: root level as /placeholders)')
 });
 
 const AddPlaceholderSchema = z.object({
@@ -16,14 +17,14 @@ const AddPlaceholderSchema = z.object({
   repo: z.string().describe('The repository name'),
   key: z.string().describe('Placeholder key (e.g., "site-title")'),
   text: z.string().describe('Placeholder text value'),
-  configPath: z.string().optional().default('placeholders').describe('Path to placeholders.json (default: placeholders)')
+  configPath: z.string().optional().default('').describe('Optional folder path (default: root level as /placeholders)')
 });
 
 const RemovePlaceholderSchema = z.object({
   org: z.string().describe('The organization name'),
   repo: z.string().describe('The repository name'),
   key: z.string().describe('Placeholder key to remove'),
-  configPath: z.string().optional().default('placeholders').describe('Path to placeholders.json (default: placeholders)')
+  configPath: z.string().optional().default('').describe('Optional folder path (default: root level as /placeholders)')
 });
 
 const SetupPlaceholdersSchema = z.object({
@@ -33,11 +34,17 @@ const SetupPlaceholdersSchema = z.object({
     key: z.string().describe('Placeholder key'),
     text: z.string().describe('Placeholder text')
   })).describe('Array of placeholders to create'),
-  configPath: z.string().optional().default('placeholders').describe('Path to placeholders.json (default: placeholders)')
+  configPath: z.string().optional().default('').describe('Optional folder path (default: root level as /placeholders)')
 });
 
 function getPlaceholdersPath(configPath) {
-  return buildLibraryPath(LIBRARY_TYPES.PLACEHOLDERS, configPath);
+  // If no configPath, place at root: /placeholders
+  // If configPath provided, place in that folder: /configPath/placeholders
+  if (!configPath || configPath === '') {
+    return '/placeholders';
+  }
+  const cleanPath = configPath.startsWith('/') ? configPath.slice(1) : configPath;
+  return `/${cleanPath}/placeholders`;
 }
 
 function createPlaceholdersJSON(entries) {
@@ -45,7 +52,7 @@ function createPlaceholdersJSON(entries) {
 }
 
 function createPlaceholderEntry(item) {
-  return { Key: item.key, Text: item.text };
+  return { key: item.key, value: item.text };
 }
 
 function buildResponse(args, additional = {}) {
@@ -72,17 +79,23 @@ export const tools = [
   },
   {
     name: 'da_library_add_placeholder',
-    description: 'Add or update a placeholder in placeholders.json',
+    description: 'Add or update a placeholder in placeholders.json. Automatically checks and registers Placeholders in site config library sheet if needed.',
     schema: AddPlaceholderSchema,
     handler: async (args) => {
       const result = await addSheetItem(
         args.org,
         args.repo,
         createPlaceholderEntry(args),
-        'Key',
+        'key',
         getPlaceholdersPath(args.configPath),
         createPlaceholdersJSON
       );
+      
+      // Always check and register if needed, not just on first create
+      const configUrl = `${buildContentUrl(args.org, args.repo, getPlaceholdersPath(args.configPath))}.json`;
+      const regResult = await registerLibraryType(args.org, args.repo, 'Placeholders', configUrl);
+      result.registered = regResult.registered;
+      result.alreadyRegistered = regResult.existed;
       
       return buildResponse(args, result);
     }
@@ -96,7 +109,7 @@ export const tools = [
         args.org,
         args.repo,
         args.key,
-        'Key',
+        'key',
         getPlaceholdersPath(args.configPath),
         createPlaceholdersJSON
       );
@@ -106,18 +119,26 @@ export const tools = [
   },
   {
     name: 'da_library_setup_placeholders',
-    description: 'Batch setup placeholders. Creates or updates multiple placeholders in placeholders.json.',
+    description: 'Batch setup placeholders. Creates or updates multiple placeholders in placeholders.json. Automatically registers in library.',
     schema: SetupPlaceholdersSchema,
     handler: async (args) => {
       const result = await setupSheetItems(
         args.org,
         args.repo,
         args.placeholders,
-        'Key',
+        'key',
         getPlaceholdersPath(args.configPath),
         createPlaceholdersJSON,
         createPlaceholderEntry
       );
+      
+      const configUrl = `${buildContentUrl(args.org, args.repo, getPlaceholdersPath(args.configPath))}.json`;
+      const regResult = await registerLibraryType(args.org, args.repo, 'Placeholders', configUrl);
+      result.registered = regResult.registered;
+      result.librarySheet = {
+        existed: !regResult.createdSheet,
+        entryCount: regResult.libraryEntryCount
+      };
       
       return buildResponse(args, result);
     }

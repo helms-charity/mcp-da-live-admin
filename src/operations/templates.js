@@ -5,6 +5,7 @@ import { daAdminRequest, formatURL, uploadHTML } from '../common/utils.js';
 import { buildLibraryPath, buildContentUrl, createLibraryJSON } from '../common/library-cfg-utils.js';
 import { listSheetItems, addSheetItem, removeSheetItem } from '../common/sheet-utils.js';
 import { LIBRARY_TYPES } from '../common/global.js';
+import { registerLibraryType } from './config.js';
 
 const ListTemplatesSchema = z.object({
   org: z.string().describe('The organization name'),
@@ -134,6 +135,12 @@ async function addTemplate(org, repo, templateName, sourcePage, baseFolder = 'li
 
       result.steps[2].status = 'completed';
       result.steps[2].existed = addResult.existed;
+      
+      // Always check and register if needed, not just on first create
+      const configUrl = `${buildContentUrl(org, repo, getTemplatesPath(baseFolder))}.json`;
+      const regResult = await registerLibraryType(org, repo, 'Templates', configUrl);
+      result.registered = regResult.registered;
+      result.alreadyRegistered = regResult.existed;
     }
 
     result.success = true;
@@ -189,6 +196,17 @@ async function setupTemplates(org, repo, templates, baseFolder = 'library', prev
   }
 
   result.success = result.summary.failed === 0;
+  
+  if (!preview && result.summary.created > 0) {
+    const configUrl = `${buildContentUrl(org, repo, getTemplatesPath(baseFolder))}.json`;
+    const regResult = await registerLibraryType(org, repo, 'Templates', configUrl);
+    result.registered = regResult.registered;
+    result.librarySheet = {
+      existed: !regResult.createdSheet,
+      entryCount: regResult.libraryEntryCount
+    };
+  }
+  
   return result;
 }
 
@@ -208,7 +226,7 @@ export const tools = [
   },
   {
     name: 'da_library_add_template',
-    description: 'Add a single template to the library. Copies content from source page and adds to templates.json. Use preview=true to see plan.',
+    description: 'Add a single template to the library. Copies content from source page and adds to templates.json. Automatically checks and registers Templates in site config library sheet if needed. Use preview=true to see plan.',
     schema: AddTemplateSchema,
     handler: async (args) => {
       const result = await addTemplate(
@@ -245,7 +263,7 @@ export const tools = [
   },
   {
     name: 'da_library_setup_templates',
-    description: 'Batch setup templates. Creates template documents from source pages and updates templates.json. Use preview=true to see plan.',
+    description: 'Batch setup templates. Creates template documents from source pages and updates templates.json. Automatically registers in library. Use preview=true to see plan.',
     schema: SetupTemplatesSchema,
     handler: async (args) => {
       const result = await setupTemplates(

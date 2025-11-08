@@ -12,7 +12,6 @@ import * as list from './operations/list.js';
 import * as source from './operations/source.js';
 import * as media from './operations/media.js';
 import * as config from './operations/config.js';
-import * as ghBlocks from './operations/gh-blocks.js';
 import * as blocks from './operations/blocks.js';
 import * as library from './operations/library.js';
 import * as templates from './operations/templates.js';
@@ -47,7 +46,7 @@ const server = new Server(
       References are stored in .da/mediaindex/media.json and include all images, videos, documents, and fragments used across pages.
 
       Library management tools allow you to:
-      - Discover blocks from GitHub repositories
+      - Discover blocks from LOCAL file system or GitHub repositories
       - Create block documentation in DA
       - Manage library configurations (blocks.json, templates.json, placeholders.json, icons.json)
       - Register library types in site configuration
@@ -62,11 +61,20 @@ const server = new Server(
       - Site config at /config/{org}/{repo} contains a "library" sheet that registers library types
       - Block paths in library configs use content.da.live domain format
       
-      GitHub integration:
+      Block Sources (THREE OPTIONS):
+      1. LOCAL (auto-detect): If run from an EDS project directory with blocks/ folder, blocks are read from LOCAL file system
+      2. LOCAL (explicit): Set useLocal: true to explicitly use local blocks
+      3. GITHUB (explicit): Provide github: { org, repo, branch } to fetch from GitHub API (for repoless setups)
+      
+      IMPORTANT: 
+      - By DEFAULT, tools will AUTO-DETECT and prefer LOCAL blocks if ./blocks exists
+      - Only use GitHub source if explicitly requested or when setting up from a different repo (repoless)
+      - DA org/repo (destination) is separate from block source (local or GitHub)
+      
+      GitHub integration (when using GitHub source):
       - Requires GITHUB_TOKEN environment variable for private repositories
       - Public repositories can be accessed without token (with rate limits)
       - Blocks are discovered from /blocks folder (or custom path like aemedge/blocks)
-      - GitHub org/repo names match DA org/repo names
     `,
   }
 );
@@ -76,7 +84,6 @@ const tools = [
   ...source.tools,
   ...media.tools,
   ...config.tools,
-  ...ghBlocks.tools,
   ...blocks.tools,
   ...library.tools,
   ...templates.tools,
