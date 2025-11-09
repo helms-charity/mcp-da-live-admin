@@ -31,7 +31,7 @@ To use this MCP server with Cursor AI, go to `Cursor Settings`, `MCP` and a `New
 
 In the chat, you can then ask things like: `Via the DA Admin, give me the list of resources in <your_org>/<your_repo>/<path>`.
 
-## GitHub Token Setup (Required for Block Library)
+## GitHub Token Setup (Optional , Required if generating Block documents based on code in GH repo)
 
 To use the block library features, add a `GITHUB_TOKEN` to your MCP config:
 
